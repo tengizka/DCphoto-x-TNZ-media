@@ -296,6 +296,7 @@ footer.credit{
 <div id="denied">
   <h2>Доступа нет</h2>
   <p>Этот аккаунт Telegram не в списке допущенных пользователей.<br>Обратитесь к владельцу приложения, чтобы вас добавили.</p>
+  <p id="denied-detail" style="margin-top:18px; font-size:11.5px; color:#8a7256; font-family:monospace; word-break:break-all;"></p>
 </div>
 
 <div id="app" style="display:none;">
@@ -473,14 +474,16 @@ function getTgUser(){
 async function boot(){
   const tgUser = getTgUser();
   if(!tgUser){
-    // локальный тест вне Telegram — можно раскомментировать строку ниже для отладки
-    // const tgUser = { username: 'teng1zka', name: 'Tengizka (тест)' };
-    finishSplash(false);
+    finishSplash(false, 'Telegram не передал данные пользователя (initDataUnsafe.user пуст). Открой мини-апп через кнопку в боте, а не просто по ссылке в браузере.');
     return;
   }
   const { data, error } = await sb.from('app_users').select('*').ilike('telegram_username', tgUser.username).maybeSingle();
-  if(error || !data){
-    finishSplash(false);
+  if(error){
+    finishSplash(false, 'Ошибка Supabase: ' + error.message);
+    return;
+  }
+  if(!data){
+    finishSplash(false, 'username @' + tgUser.username + ' не найден в таблице app_users');
     return;
   }
   ME = { telegram_username: data.telegram_username, display_name: data.display_name || tgUser.name, role: data.role };
@@ -489,7 +492,7 @@ async function boot(){
   finishSplash(true);
 }
 
-function finishSplash(granted){
+function finishSplash(granted, reason){
   setTimeout(()=>{
     document.getElementById('splash').classList.add('hide');
     if(granted){
@@ -498,6 +501,7 @@ function finishSplash(granted){
       document.getElementById('fab-add').style.display = 'flex';
     } else {
       document.getElementById('denied').classList.add('show');
+      document.getElementById('denied-detail').textContent = reason || '';
     }
   }, 1500);
 }
