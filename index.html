@@ -429,6 +429,20 @@ const SUPABASE_ANON_KEY = "sb_publishable_0T3s1qkV9hl6g1czQCwX9w_8MycaeWR";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+/* ---------- уведомления от бота лично каждому пользователю ---------- */
+const NOTIFY_URL = SUPABASE_URL + "/functions/v1/notify";
+const NOTIFY_SECRET = "rOKtBat5LlEEgsthbHHX9mdHePWczf2F";
+const LOW_STOCK_THRESHOLD = 2;
+async function notifyBot(text){
+  try{
+    await fetch(NOTIFY_URL, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-notify-key': NOTIFY_SECRET },
+      body: JSON.stringify({ text, exclude_username: ME ? ME.telegram_username : undefined })
+    });
+  }catch(e){ /* уведомление не критично — молча игнорируем сбой сети */ }
+}
+
 /* ---------- иконки ---------- */
 const ICONS = {
   magnet: '<path d="M7 3v8a5 5 0 0 0 10 0V3"/><path d="M7 3H4v8" stroke-dasharray="0"/><path d="M17 3h3v8"/><path d="M7 3h4M13 3h4"/>',
@@ -466,7 +480,7 @@ function getTgUser(){
     const tg = window.Telegram && window.Telegram.WebApp;
     if(tg){ tg.ready(); tg.expand(); }
     const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
-    if(u && u.username) return { username: u.username, name: [u.first_name,u.last_name].filter(Boolean).join(' ') || u.username };
+    if(u && u.username) return { username: u.username, id: u.id, name: [u.first_name,u.last_name].filter(Boolean).join(' ') || u.username };
   }catch(e){}
   return null;
 }
@@ -487,6 +501,7 @@ async function boot(){
     return;
   }
   ME = { telegram_username: data.telegram_username, display_name: data.display_name || tgUser.name, role: data.role };
+  if(tgUser.id) sb.from('app_users').update({ telegram_id: tgUser.id }).ilike('telegram_username', tgUser.username).then(()=>{});
   await Promise.all([loadItems(), loadHistory(), ME.role !== 'user' ? loadUsers() : Promise.resolve()]);
   renderShell();
   finishSplash(true);
@@ -634,6 +649,13 @@ document.getElementById('detail-save').addEventListener('click', async ()=>{
   await Promise.all([loadItems(), loadHistory()]);
   renderItems(); renderHistory();
   hideModal('modal-item');
+  const label = activeItem.subcategory || activeItem.name;
+  const verb = detailDelta > 0 ? 'добавил' : 'списал';
+  let msg = `👤 <b>${escapeHtml(ME.display_name)}</b> ${verb} «${escapeHtml(label)}»: ${detailDelta>0?'+':''}${fmt(detailDelta)} ${escapeHtml(activeItem.unit)} (осталось ${fmt(newQty)} ${escapeHtml(activeItem.unit)})`;
+  if(newQty <= LOW_STOCK_THRESHOLD){
+    msg += `\n⚠️ «${escapeHtml(label)}» заканчивается — осталось всего ${fmt(newQty)} ${escapeHtml(activeItem.unit)}`;
+  }
+  notifyBot(msg);
 });
 document.getElementById('detail-delete').addEventListener('click', async ()=>{
   if(!confirm('Удалить «' + activeItem.name + '» из списка совсем?')) return;
@@ -642,6 +664,7 @@ document.getElementById('detail-delete').addEventListener('click', async ()=>{
   await Promise.all([loadItems(), loadHistory()]);
   renderItems(); renderHistory();
   hideModal('modal-item');
+  notifyBot(`🗑 <b>${escapeHtml(ME.display_name)}</b> удалил «${escapeHtml(activeItem.subcategory || activeItem.name)}» со склада`);
 });
 
 /* ---------- добавление ---------- */
@@ -686,6 +709,7 @@ document.getElementById('add-save').addEventListener('click', async ()=>{
   await Promise.all([loadItems(), loadHistory()]);
   renderItems(); renderHistory();
   hideModal('modal-add');
+  notifyBot(`✨ <b>${escapeHtml(ME.display_name)}</b> добавил новый расходник: «${escapeHtml(subcategory || name)}» (${escapeHtml(category)})`);
 });
 
 /* ---------- ИСТОРИЯ ---------- */
@@ -739,6 +763,7 @@ function renderAdmin(){
       if(!confirm('Убрать доступ у @' + uname + '?')) return;
       await sb.from('app_users').delete().ilike('telegram_username', uname);
       await loadUsers(); renderAdmin();
+      notifyBot(`🚪 <b>${escapeHtml(ME.display_name)}</b> убрал доступ у @${escapeHtml(uname)}`);
     });
   });
 }
@@ -750,6 +775,7 @@ document.getElementById('add-user-btn').addEventListener('click', async ()=>{
   if(error){ alert('Не получилось — возможно, такой пользователь уже есть'); return; }
   document.getElementById('new-user-username').value = '';
   await loadUsers(); renderAdmin();
+  notifyBot(`🔑 <b>${escapeHtml(ME.display_name)}</b> выдал доступ @${escapeHtml(uname)}`);
 });
 
 /* ---------- табы ---------- */
