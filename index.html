@@ -80,6 +80,15 @@ body{
 #denied h2{font-family:'Yeseva One',serif; font-size:22px; margin-bottom:10px; color:var(--gold);}
 #denied p{color:var(--wood-light); font-size:15px; line-height:1.5;}
 
+/* ---------- BROWSER LOGIN ---------- */
+#login{
+  display:none; position:fixed; inset:0; z-index:99; align-items:center; justify-content:center; padding:24px;
+  background: radial-gradient(circle at 50% 38%, #6b4a32 0%, #3c2a1e 72%);
+}
+#login.show{display:flex;}
+.login-card{ background:var(--wood-dark); border-radius:22px; padding:26px 22px; width:100%; max-width:340px; box-shadow:var(--shadow); border:1px solid rgba(209,162,74,.3);}
+.login-card h2{font-family:'Yeseva One',serif; color:var(--cream); text-align:center; margin:0 0 18px; font-size:18px; line-height:1.3;}
+
 /* ---------- HEADER ---------- */
 header.top{
   padding:22px 18px 16px;
@@ -265,6 +274,13 @@ nav.tabbar{
   font-size:20px; cursor:pointer;
 }
 .qty-stepper .val{font-family:'Yeseva One',serif; font-size:24px; color:var(--cream); min-width:64px; text-align:center;}
+.qty-quick{display:flex; gap:8px; justify-content:center; margin-bottom:16px;}
+.qty-quick button{
+  border:2px solid var(--plank); background:transparent; color:var(--cream); border-radius:100px;
+  padding:7px 13px; font-family:'Nunito'; font-weight:800; font-size:13px; cursor:pointer;
+}
+.qty-quick button.plus{border-color:var(--moss); color:#bfe0a3;}
+.qty-quick button.minus{border-color:var(--ember); color:#eab89f;}
 .item-detail-name{font-family:'Yeseva One',serif; font-size:19px; color:var(--cream); text-align:center; margin-bottom:2px;}
 .item-detail-icon{width:46px; height:46px; color:var(--gold); display:block; margin:0 auto 10px;}
 .danger-link{
@@ -297,6 +313,16 @@ footer.credit{
   <h2>Доступа нет</h2>
   <p>Этот аккаунт Telegram не в списке допущенных пользователей.<br>Обратитесь к владельцу приложения, чтобы вас добавили.</p>
   <p id="denied-detail" style="margin-top:18px; font-size:11.5px; color:#8a7256; font-family:monospace; word-break:break-all;"></p>
+</div>
+
+<div id="login">
+  <div class="login-card">
+    <h2>Вход в «Плащ невидимка»</h2>
+    <div class="field"><label>Логин</label><input id="login-user" autocomplete="username"></div>
+    <div class="field"><label>Пароль</label><input id="login-pass" type="password" autocomplete="current-password"></div>
+    <button class="btn-primary" id="login-btn">Войти</button>
+    <div id="login-error" style="color:#d98a6f; font-size:12.5px; text-align:center; margin-top:10px; display:none;">Неверный логин или пароль</div>
+  </div>
 </div>
 
 <div id="app" style="display:none;">
@@ -376,11 +402,11 @@ footer.credit{
     <svg class="item-detail-icon" id="detail-icon" viewBox="0 0 24 24"></svg>
     <div class="item-detail-name" id="detail-name">—</div>
     <div style="text-align:center; color:var(--wood-light); font-size:12.5px; margin-bottom:16px;" id="detail-unit"></div>
-    <div class="qty-stepper">
-      <button id="detail-minus">−</button>
-      <span class="val" id="detail-qty">0</span>
-      <button id="detail-plus">+</button>
+    <div class="field" style="margin-bottom:8px;">
+      <label>Новое количество</label>
+      <input type="number" id="detail-newqty" inputmode="decimal" step="any" style="text-align:center; font-family:'Yeseva One',serif; font-size:22px;">
     </div>
+    <div class="qty-quick" id="qty-quick"></div>
     <button class="btn-primary" id="detail-save">Сохранить изменение</button>
     <div class="danger-link" id="detail-delete">Удалить расходник из списка</div>
   </div>
@@ -478,7 +504,13 @@ let chosenIcon = 'box';
 function getTgUser(){
   try{
     const tg = window.Telegram && window.Telegram.WebApp;
-    if(tg){ tg.ready(); tg.expand(); }
+    if(tg){
+      tg.ready(); tg.expand();
+      if(tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+      if(tg.enableClosingConfirmation) tg.enableClosingConfirmation();
+      if(tg.setHeaderColor) try{ tg.setHeaderColor('#3c2a1e'); }catch(e){}
+      if(tg.setBackgroundColor) try{ tg.setBackgroundColor('#3c2a1e'); }catch(e){}
+    }
     const u = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
     if(u && u.username) return { username: u.username, id: u.id, name: [u.first_name,u.last_name].filter(Boolean).join(' ') || u.username };
   }catch(e){}
@@ -487,39 +519,51 @@ function getTgUser(){
 
 async function boot(){
   const tgUser = getTgUser();
-  if(!tgUser){
-    finishSplash(false, 'Telegram не передал данные пользователя (initDataUnsafe.user пуст). Открой мини-апп через кнопку в боте, а не просто по ссылке в браузере.');
-    return;
+  const splashTimer = new Promise(res=>setTimeout(res, 1500));
+  let outcome;
+  if(tgUser){
+    const { data, error } = await sb.from('app_users').select('*').ilike('telegram_username', tgUser.username).maybeSingle();
+    if(error){ outcome = { type:'denied', reason:'Ошибка Supabase: ' + error.message }; }
+    else if(!data){ outcome = { type:'denied', reason:'username @' + tgUser.username + ' не найден в таблице app_users' }; }
+    else{
+      if(tgUser.id) sb.from('app_users').update({ telegram_id: tgUser.id }).ilike('telegram_username', tgUser.username).then(()=>{});
+      outcome = { type:'grant', username:data.telegram_username, name:data.display_name || tgUser.name, role:data.role };
+    }
+  } else {
+    outcome = { type:'login' };
   }
-  const { data, error } = await sb.from('app_users').select('*').ilike('telegram_username', tgUser.username).maybeSingle();
-  if(error){
-    finishSplash(false, 'Ошибка Supabase: ' + error.message);
-    return;
+  await splashTimer;
+  document.getElementById('splash').classList.add('hide');
+  if(outcome.type === 'grant'){
+    await grantAccess(outcome.username, outcome.name, outcome.role);
+  } else if(outcome.type === 'denied'){
+    document.getElementById('denied').classList.add('show');
+    document.getElementById('denied-detail').textContent = outcome.reason || '';
+  } else {
+    document.getElementById('login').classList.add('show');
   }
-  if(!data){
-    finishSplash(false, 'username @' + tgUser.username + ' не найден в таблице app_users');
-    return;
-  }
-  ME = { telegram_username: data.telegram_username, display_name: data.display_name || tgUser.name, role: data.role };
-  if(tgUser.id) sb.from('app_users').update({ telegram_id: tgUser.id }).ilike('telegram_username', tgUser.username).then(()=>{});
-  await Promise.all([loadItems(), loadHistory(), ME.role !== 'user' ? loadUsers() : Promise.resolve()]);
-  renderShell();
-  finishSplash(true);
 }
 
-function finishSplash(granted, reason){
-  setTimeout(()=>{
-    document.getElementById('splash').classList.add('hide');
-    if(granted){
-      document.getElementById('app').style.display = 'block';
-      document.getElementById('tabbar').style.display = 'flex';
-      document.getElementById('fab-add').style.display = 'flex';
-    } else {
-      document.getElementById('denied').classList.add('show');
-      document.getElementById('denied-detail').textContent = reason || '';
-    }
-  }, 1500);
+async function grantAccess(telegram_username, display_name, role){
+  ME = { telegram_username, display_name, role };
+  await Promise.all([loadItems(), loadHistory(), ME.role !== 'user' ? loadUsers() : Promise.resolve()]);
+  renderShell();
+  document.getElementById('login').classList.remove('show');
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('tabbar').style.display = 'flex';
+  document.getElementById('fab-add').style.display = 'flex';
 }
+
+document.getElementById('login-btn').addEventListener('click', async ()=>{
+  const u = document.getElementById('login-user').value.trim();
+  const p = document.getElementById('login-pass').value;
+  if(u === 'admin' && p === 'admin'){
+    document.getElementById('login-error').style.display = 'none';
+    await grantAccess('admin', 'Веб-админ', 'owner');
+  } else {
+    document.getElementById('login-error').style.display = 'block';
+  }
+});
 
 /* ---------- загрузка данных ---------- */
 async function loadItems(){
@@ -618,40 +662,43 @@ function fmt(n){ return Number(n) % 1 === 0 ? Number(n).toString() : Number(n).t
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
 /* ---------- модалка деталей ---------- */
-let detailDelta = 0;
 function openItemModal(id){
   activeItem = ITEMS.find(i=>i.id===id);
   if(!activeItem) return;
-  detailDelta = 0;
-  document.getElementById('detail-icon').innerHTML = iconSvg(activeItem.icon);
-  document.getElementById('detail-icon').setAttribute('fill','none');
-  document.getElementById('detail-icon').setAttribute('stroke','currentColor');
-  document.getElementById('detail-icon').setAttribute('stroke-width','1.7');
+  const iconEl = document.getElementById('detail-icon');
+  iconEl.innerHTML = iconSvg(activeItem.icon);
+  iconEl.setAttribute('fill','none'); iconEl.setAttribute('stroke','currentColor'); iconEl.setAttribute('stroke-width','1.7');
   document.getElementById('detail-name').textContent = activeItem.subcategory || activeItem.name;
   document.getElementById('detail-unit').textContent = 'сейчас: ' + fmt(activeItem.quantity) + ' ' + activeItem.unit;
-  document.getElementById('detail-qty').textContent = fmt(activeItem.quantity);
+  document.getElementById('detail-newqty').value = fmt(activeItem.quantity);
+  buildQtyQuick();
   document.getElementById('detail-delete').style.display = (ME.role==='user') ? 'none' : 'block';
   showModal('modal-item');
 }
-document.getElementById('detail-minus').addEventListener('click', ()=>{
-  detailDelta -= 1;
-  document.getElementById('detail-qty').textContent = fmt(Math.max(0, activeItem.quantity + detailDelta));
-});
-document.getElementById('detail-plus').addEventListener('click', ()=>{
-  detailDelta += 1;
-  document.getElementById('detail-qty').textContent = fmt(activeItem.quantity + detailDelta);
-});
+function buildQtyQuick(){
+  const steps = [-10,-5,-1,1,5,10];
+  const wrap = document.getElementById('qty-quick');
+  wrap.innerHTML = steps.map(s=>`<button class="${s>0?'plus':'minus'}" data-step="${s}">${s>0?'+':''}${s}</button>`).join('');
+  wrap.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const input = document.getElementById('detail-newqty');
+      const val = Math.max(0, (parseFloat(input.value)||0) + parseFloat(btn.dataset.step));
+      input.value = fmt(val);
+    });
+  });
+}
 document.getElementById('detail-save').addEventListener('click', async ()=>{
-  if(detailDelta === 0){ hideModal('modal-item'); return; }
-  const newQty = Math.max(0, activeItem.quantity + detailDelta);
+  const newQty = Math.max(0, parseFloat(document.getElementById('detail-newqty').value) || 0);
+  const delta = newQty - activeItem.quantity;
+  if(delta === 0){ hideModal('modal-item'); return; }
   await sb.from('items').update({ quantity:newQty, updated_at:new Date().toISOString() }).eq('id', activeItem.id);
-  await logHistory(activeItem.id, activeItem.name, detailDelta > 0 ? 'add' : 'remove', detailDelta);
+  await logHistory(activeItem.id, activeItem.name, delta > 0 ? 'add' : 'remove', delta);
   await Promise.all([loadItems(), loadHistory()]);
   renderItems(); renderHistory();
   hideModal('modal-item');
   const label = activeItem.subcategory || activeItem.name;
-  const verb = detailDelta > 0 ? 'добавил' : 'списал';
-  let msg = `👤 <b>${escapeHtml(ME.display_name)}</b> ${verb} «${escapeHtml(label)}»: ${detailDelta>0?'+':''}${fmt(detailDelta)} ${escapeHtml(activeItem.unit)} (осталось ${fmt(newQty)} ${escapeHtml(activeItem.unit)})`;
+  const verb = delta > 0 ? 'добавил' : 'списал';
+  let msg = `👤 <b>${escapeHtml(ME.display_name)}</b> ${verb} «${escapeHtml(label)}»: ${delta>0?'+':''}${fmt(delta)} ${escapeHtml(activeItem.unit)} (осталось ${fmt(newQty)} ${escapeHtml(activeItem.unit)})`;
   if(newQty <= LOW_STOCK_THRESHOLD){
     msg += `\n⚠️ «${escapeHtml(label)}» заканчивается — осталось всего ${fmt(newQty)} ${escapeHtml(activeItem.unit)}`;
   }
